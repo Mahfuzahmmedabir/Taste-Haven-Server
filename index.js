@@ -6,6 +6,7 @@ require('dotenv').config();
 
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 console.log(process.env.STRIPE_SECRET_KEY);
+
 const port = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
@@ -179,8 +180,8 @@ async function run() {
     app.get('/', (req, res) => {
       res.send('Hello world');
     });
-    if (verifyToken || verifyAdmin) {
-      app.post('/create-payment-intent', async (req, res) => {
+
+      app.post('/create-payment-intent', verifyToken, async (req, res) => {
         const { price } = req.body;
         const amount = parseInt(price * 100);
         // console.log(amount, 'aouoewdsfsd');
@@ -189,11 +190,12 @@ async function run() {
           currency: 'usd',
           payment_method_types: ['card'],
         });
+        console.log('',paymentIntent)
 
         res.send({ clientSecret: paymentIntent.client_secret });
       });
 
-      app.post('/payments', async (req, res) => {
+      app.post('/payments',   async (req, res) => {
         const payment = req.body;
         console.log(payment);
         const paymentResult = await paymentCollection.insertOne(payment);
@@ -205,23 +207,24 @@ async function run() {
         const deleteMany = await cartCollection.deleteMany(quary);
         res.send({ paymentResult, deleteMany });
       });
-    }
+    
 
-    app.get('/admin-status', verifyToken,verifyAdmin, async (req, res) => {
+    app.get('/admin-status', verifyToken, verifyAdmin, async (req, res) => {
       const user = await usersCollection.estimatedDocumentCount();
       const itemsCount = await menuCollection.estimatedDocumentCount();
       const orders = await paymentCollection.estimatedDocumentCount();
-
-      const payment = await paymentCollection.aggregate([
-        {
-          $group: {
-            _id: null,
-            totalRevenue: {
-              $sum: '$price'
-            }
-          }
-        },
-      ]).toArray()
+      const payment = await paymentCollection
+        .aggregate([
+          {
+            $group: {
+              _id: null,
+              totalRevenue: {
+                $sum: '$price',
+              },
+            },
+          },
+        ])
+        .toArray();
       const result = payment.length > 0 ? payment[0].totalRevenue : 0;
 
       res.send({
@@ -230,6 +233,43 @@ async function run() {
         orders,
         result,
       });
+    });
+
+    app.get('/order-stats', async (req, res) => {
+      const reslut = await paymentCollection
+        .aggregate([
+          {
+            $unwind: '$menuId',
+          },
+          {
+            $lookup: {
+              from: 'menu',
+              localField: 'menuId',
+              foreignField: '_id',
+              as: 'menuItems',
+            },
+          },
+          {
+            $unwind: '$menuItems',
+          },
+          {
+            $group: {
+              _id: '$menuItems.category',
+              quantity: { $sum: 1 },
+              revenue: { $sum: '$menuItems.price' },
+            },
+          },
+          {
+            $project: {
+              _id: 0,
+              category: '$_id',
+              quantity: '$quantity',
+              revenue: '$revenue',
+            },
+          },
+        ])
+        .toArray();
+      res.send(reslut);
     });
 
     // Send a ping to confirm a successful connection
